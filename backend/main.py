@@ -20,6 +20,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return {"message": "TaleForge API is running", "version": "1.0.0"}
+
 gemini = GeminiClient()
 
 # Added Pydantic models

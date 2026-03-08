@@ -6,14 +6,23 @@ Powered by the **Google Genesis-Stack** (Vertex AI Native) and the **Miro REST A
 
 ---
 
+## 🌍 Live Deployment
+
+TaleForge is now deployed on **Google Cloud Run** for high-availability and serverless scaling:
+
+- **Frontend App**: [https://taleforge-frontend-y7waogt4oa-uc.a.run.app](https://taleforge-frontend-y7waogt4oa-uc.a.run.app)
+- **Backend API**: [https://taleforge-backend-y7waogt4oa-uc.a.run.app](https://taleforge-backend-y7waogt4oa-uc.a.run.app)
+
+---
+
 ## 🌟 Generation Modes
 
 TaleForge supports specialized modes to tailor prompt engineering and asset generation to your specific needs:
 - **📖 Storybook**: Narrative storytelling with cinematic art and background elements.
 - **📈 Marketing Campaign**: Elite ad copy, hero product photography, and promotional lifestyle videos.
-- **🎓 Educational Explainer**: Instructional analogies and step-by-step explanations paired with concept maps drawn on Miro.
-- **📊 Pitch Deck**: Business architecture and value chain workflows plotted live to Miro.
-- **⚙️ Workflow Planning**: Standardized flowcharts, drawn dynamically on Miro grids with connectors.
+- **🎓 Educational Explainer**: Instructional analogies and step-by-step explanations paired with concept maps.
+- **📊 Pitch Deck**: Business architecture and value chain workflows plotted live.
+- **⚙️ Workflow Planning**: Standardized flowcharts and process diagrams.
 - **📱 Social Media Post**: Viral hooks, vertical aesthetic photography, and hashtags optimized for feed engagement.
 
 ---
@@ -23,20 +32,21 @@ TaleForge supports specialized modes to tailor prompt engineering and asset gene
 Experience structured content as it unfolds with interleaved assets:
 - **Vertex AI Imagen 3**: Photorealistic scene art and high-end imagery.
 - **Vertex AI Veo**: High-fidelity cinematic motion clips woven into key story beats.
-- **Miro API**: Live JSON-driven diagram generation (Shapes, Sticky Notes, and Connectors) for educational/business workflows.
-- **Google Cloud TTS**: High-end **Neural2/Studio** voices for expressive narration and multi-character acting.
+- **Google Cloud TTS**: High-end **Neural2/Studio** voices for multi-character acting and synchronized narration.
 - **Dynamic Score**: A real-time orchestral score that shifts moods based on scene context.
+- **Cloud Run Native**: Fully containerized and deployed on Google's global serverless infrastructure.
 
 ---
 
 ## 🏗️ Technical Architecture
 
-- **Backend**: Python (FastAPI), Google Gen AI SDK, Miro API (`requests`).
-- **Frontend**: React (Vite) + TypeScript + Vanilla CSS.
-- **GenAI Suite**: Gemini 2.0 Flash / 2.0 Pro.
+- **Backend**: Python (FastAPI), Google Gen AI SDK, Miro API (`requests`), Docker.
+- **Frontend**: React (Vite) + TypeScript + Vanilla CSS + Node.js `serve`.
+- **GenAI Suite**: Gemini 2.0 Flash / 2.0 Pro (Story Engine).
 - **Vision**: Vertex AI Imagen 3 (Images) & Veo (Video).
 - **Audio**: Google Cloud Text-to-Speech (Narration).
-- **Persistence**: Google Cloud Storage (GCS) for asset delivery.
+- **Hosting**: Google Cloud Run (Containerized Deployment).
+- **CI/CD**: Google Cloud Build & Artifact Registry.
 
 ---
 
@@ -46,16 +56,14 @@ Experience structured content as it unfolds with interleaved assets:
 - Python 3.10+
 - Node.js 18+
 - Google Cloud Project with Vertex AI and GCS enabled.
-- (Optional) Miro Developer App for Workflow Planning diagrams.
+- Docker (for containerization and testing).
 
-### 2. Environment Configuration
-Create a `.env` file in the root directory (or `backend/`):
+### 2. Local Environment Configuration
+Create a `.env` file in the `backend/` directory:
 ```env
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=us-central1
 GEMINI_API_KEY_1=your-api-key
-MIRO_ACCESS_TOKEN=your-miro-developer-token
-MIRO_BOARD_ID=target-board-id
 # Add up to GEMINI_API_KEY_5 for high-availability rotation
 ```
 
@@ -73,23 +81,28 @@ npm install
 npm run dev
 ```
 
-### 5. Google Cloud Authentication
-Ensure your local environment is authenticated to access Vertex AI:
+### 5. Deployment to Cloud Run
+To deploy the application to your own Google Cloud project:
 ```powershell
-gcloud auth login
-gcloud auth application-default login
-gcloud config set project your-project-id
+# Deploy Backend
+cd backend
+gcloud run deploy taleforge-backend --source . --region us-central1 --allow-unauthenticated
+
+# Deploy Frontend
+cd frontend
+# Ensure .env.production has your backend URL
+gcloud run deploy taleforge-frontend --source . --region us-central1 --allow-unauthenticated
 ```
 
 ---
 
 ## 🎭 Usage
-1. Open TaleForge in your browser (`http://localhost:5173/`).
-2. Select your **Generation Mode** (e.g., Workflow Planning, Marketing Campaign).
+1. Open TaleForge in your browser.
+2. Select your **Generation Mode** (e.g., Storybook, Marketing Campaign).
 3. Enter your prompt or use the **"Surprise Me"** button.
 4. Add **Keywords** to ground the AI's creative direction.
 5. Click **Forge Story** and watch your vision turn into structured multimedia.
 
 ---
 
-Built with ❤️ by the **SHADOW**.
+Built with ❤️ by **SHADOW**.
