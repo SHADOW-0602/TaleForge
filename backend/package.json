@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@mirohq/miro-api": "^2.2.4"
+  }
+}
