@@ -31,21 +31,22 @@ TaleForge supports specialized modes to tailor prompt engineering and asset gene
 
 Experience structured content as it unfolds with interleaved assets:
 - **Vertex AI Imagen 3**: Photorealistic scene art and high-end imagery.
-- **Vertex AI Veo**: High-fidelity cinematic motion clips woven into key story beats.
+- **Vertex AI Veo 3.1**: High-fidelity cinematic motion clips woven into key story beats.
 - **Google Cloud TTS**: High-end **Neural2/Studio** voices for multi-character acting and synchronized narration.
-- **Dynamic Score**: A real-time orchestral score that shifts moods based on scene context.
-- **Cloud Run Native**: Fully containerized and deployed on Google's global serverless infrastructure.
+- **High-Availability Mapping**: Automatic platform-aware model routing (e.g., Vertex ID alignment for Gemini 2.0/2.5).
+- **Synchronized Cinematics**: Unified playback engine that keeps cinematic visuals perfectly in sync with the narration.
+- **Instant Accessibility**: Direct GCS public-read narration delivery for zero-latency playback.
 
 ---
 
 ## 🏗️ Technical Architecture
 
-- **Backend**: Python (FastAPI), Google Gen AI SDK, Miro API (`requests`), Docker.
-- **Frontend**: React (Vite) + TypeScript + Vanilla CSS + Node.js `serve`.
-- **GenAI Suite**: Gemini 2.0 Flash / 2.0 Pro (Story Engine).
-- **Vision**: Vertex AI Imagen 3 (Images) & Veo (Video).
-- **Audio**: Google Cloud Text-to-Speech (Narration).
-- **Hosting**: Google Cloud Run (Containerized Deployment).
+- **Backend**: Python (FastAPI), Google Gen AI SDK, Miro REST API, Docker.
+- **Frontend**: React (Vite) + TypeScript + Vanilla CSS.
+- **GenAI Suite**: Gemini 2.0 Flash / 2.5 Pro (via robust multi-client rotation).
+- **Vision**: Vertex AI Imagen 3 & Veo 3.1.
+- **Audio**: Google Cloud Text-to-Speech (Neural2/Studio Engine).
+- **Hosting**: Google Cloud Run + Artifact Registry.
 - **CI/CD**: Google Cloud Build & Artifact Registry.
 
 ---

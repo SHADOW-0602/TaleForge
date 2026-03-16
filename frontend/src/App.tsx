@@ -55,7 +55,7 @@ export default function App() {
   const streamEndRef = useRef<HTMLDivElement>(null);
 
   const [chatHistory, setChatHistory] = useState<ChatRecord[]>([]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   // Synchronized Narration Playback State
   const [narrationBlocks, setNarrationBlocks] = useState<{ index: number; speaker: string; text: string; audio_url: string; music_url?: string }[] | null>(null);
@@ -72,12 +72,30 @@ export default function App() {
     streamEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const [view, setView] = useState<'home' | 'generation'>('home');
+  const [view, setView] = useState<'home' | 'generation' | 'library' | 'privacy' | 'terms'>('home');
   const [deletedChatIds, setDeletedChatIds] = useState<Set<string>>(new Set());
+
+  // Progress Persistence Helpers
+  const saveStoryProgress = (chatId: string, progress: number) => {
+    if (!chatId) return;
+    const storageKey = `taleforge_progress_${chatId}`;
+    const existing = localStorage.getItem(storageKey);
+    // Only update if progress is further than before
+    if (!existing || progress > parseInt(existing)) {
+      localStorage.setItem(storageKey, progress.toString());
+    }
+  };
+
+  const getStoryProgress = (chatId: string): number => {
+    const progress = localStorage.getItem(`taleforge_progress_${chatId}`);
+    return progress ? parseInt(progress) : 0;
+  };
 
   // States for Continue Chat
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [continueInput, setContinueInput] = useState('');
+
+  const hasVisuals = stream.some(p => ['image', 'video', 'blueprint'].includes(p.type));
 
   const handleContinue = async () => {
     if (!continueInput.trim() || !currentChatId) return;
@@ -101,7 +119,8 @@ export default function App() {
           mode: generationMode,
           style,
           duration,
-          keywords
+          keywords,
+          narration: true
         }));
         setContinueInput(''); // clear input
       };
@@ -112,8 +131,17 @@ export default function App() {
 
           if (part.type === 'music') {
             if (audioRef.current && !isMuted && !isPlayingStory) {
-              audioRef.current.src = STYLE_MUSIC[part.content || 'Cinematic'] || audioRef.current.src;
-              audioRef.current.play().catch(e => console.error("Scene music error:", e));
+              audioRef.current.play().catch(e => {
+                if (e.name !== 'AbortError') console.error("Scene music error:", e);
+              });
+            }
+            return;
+          }
+
+          if (part.type === 'narration_track') {
+            if (part.blocks) {
+              setNarrationBlocks(part.blocks);
+              setLyriaMusicUrl(part.background_music || null);
             }
             return;
           }
@@ -307,7 +335,9 @@ export default function App() {
       setHasInteracted(true);
       if (audioRef.current && audioRef.current.paused) {
         audioRef.current.play()
-          .catch(err => console.error("Playback failed:", err));
+          .catch(err => {
+            if (err.name !== 'AbortError') console.error("Playback failed:", err);
+          });
       }
     };
 
@@ -321,6 +351,16 @@ export default function App() {
     };
   }, []);
 
+  const [voiceVolume, setVoiceVolume] = useState(0.8);
+  const [ambientVolume, setAmbientVolume] = useState(0.4);
+
+  // Sync volumes when state changes
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = isMuted ? 0 : ambientVolume;
+    if (speechAudioRef.current) speechAudioRef.current.volume = isMuted ? 0 : voiceVolume;
+    if (lyriaAudioRef.current) lyriaAudioRef.current.volume = isMuted ? 0 : ambientVolume;
+  }, [voiceVolume, ambientVolume, isMuted]);
+
   // Update music track when style changes
   useEffect(() => {
     if (audioRef.current) {
@@ -331,26 +371,50 @@ export default function App() {
       } else {
         audioRef.current.src = STYLE_MUSIC[style] || STYLE_MUSIC['Cinematic'];
       }
+      
       audioRef.current.load();
+
       // Only attempt to play if we already have permission from an interaction
       if (!isMuted && hasInteracted) {
-        audioRef.current.play().catch(err => console.error("Style music play failed:", err));
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(err => {
+            if (err.name !== 'AbortError') {
+              console.error("Style music play failed:", err);
+            }
+          });
+        }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [style]); // intentionally omitted hasInteracted and isMuted so track doesn't switch on click/mute
+  }, [style, hasInteracted, isMuted]); // Added dependencies to handle play after interaction
 
   const toggleMute = () => {
     if (audioRef.current) {
       if (isMuted) {
         audioRef.current.muted = false;
-        audioRef.current.play(); // Ensure it plays when unmuting
+        audioRef.current.play().catch(e => {
+          if (e.name !== 'AbortError') console.error("Unmute play failed:", e);
+        }); // Ensure it plays when unmuting
       } else {
         audioRef.current.muted = true;
       }
       setIsMuted(!isMuted);
     }
   };
+
+  // Sync side-pane video playback with story narration state
+  useEffect(() => {
+    const sideVideos = document.querySelectorAll('.video-part video');
+    sideVideos.forEach((v: any) => {
+      if (isPlayingStory) {
+        v.play().catch((e: any) => {
+          if (e.name !== 'AbortError') console.error("Side video sync play failed:", e);
+        });
+      } else {
+        v.pause();
+      }
+    });
+  }, [isPlayingStory]);
 
   const handleSurpriseMe = async () => {
     setLoading(true);
@@ -418,7 +482,9 @@ export default function App() {
               const targetSrc = STYLE_MUSIC[part.content || 'Cinematic'];
               if (targetSrc && (!audioRef.current.src || !audioRef.current.src.endsWith(targetSrc))) {
                 audioRef.current.src = targetSrc;
-                audioRef.current.play().catch(e => console.error("Scene music error:", e));
+                audioRef.current.play().catch(e => {
+                  if (e.name !== 'AbortError') console.error("Scene music error:", e);
+                });
               }
             }
             return; // Don't add to visible stream
@@ -476,17 +542,27 @@ export default function App() {
     if (nextIndex < narrationBlocks.length) {
       setCurrentBlockIndex(nextIndex);
       const nextBlock = narrationBlocks[nextIndex];
+      
+      // Save progress
+      if (currentChatId) {
+        const progress = Math.round(((nextIndex + 1) / narrationBlocks.length) * 100);
+        saveStoryProgress(currentChatId, progress);
+      }
 
       if (speechAudioRef.current) {
         speechAudioRef.current.src = nextBlock.audio_url;
-        speechAudioRef.current.play().catch(e => console.error("Speech play error:", e));
+        speechAudioRef.current.play().catch(e => {
+          if (e.name !== 'AbortError') console.error(`Speech play error [${nextBlock.audio_url}]:`, e);
+        });
 
         // --- Dynamic Scene Soundtrack Swap ---
         if (nextBlock.music_url && lyriaAudioRef.current) {
           if (lyriaAudioRef.current.src !== nextBlock.music_url) {
             lyriaAudioRef.current.src = nextBlock.music_url;
             lyriaAudioRef.current.volume = 0.15; // Ensure it stays quiet during swap
-            lyriaAudioRef.current.play().catch(e => console.error("Dynamic scene music play failed:", e));
+            lyriaAudioRef.current.play().catch(e => {
+              if (e.name !== 'AbortError') console.error("Dynamic scene music play failed:", e);
+            });
           }
         }
       }
@@ -509,14 +585,23 @@ export default function App() {
     // Play Lyria track if available, also very quiet
     if (lyriaAudioRef.current && lyriaMusicUrl) {
       lyriaAudioRef.current.volume = 0.15; // Keep it quiet behind speech
-      lyriaAudioRef.current.play().catch(e => console.error("Lyria music err:", e));
+      lyriaAudioRef.current.play().catch(e => {
+        if (e.name !== 'AbortError') console.error("Lyria music err:", e);
+      });
     }
 
     // Start first block
     if (narrationBlocks && narrationBlocks.length > 0 && speechAudioRef.current) {
+      // Save initial progress
+      if (currentChatId) {
+        const progress = Math.round((1 / narrationBlocks.length) * 100);
+        saveStoryProgress(currentChatId, progress);
+      }
       speechAudioRef.current.src = narrationBlocks[0].audio_url;
-      speechAudioRef.current.volume = 1.0; // Ensure speech is at full volume
-      speechAudioRef.current.play().catch(e => console.error("Speech play err:", e));
+      speechAudioRef.current.volume = voiceVolume; // Use user defined volume
+      speechAudioRef.current.play().catch(e => {
+        if (e.name !== 'AbortError') console.error(`Speech play err [${narrationBlocks[0].audio_url}]:`, e);
+      });
     }
   };
 
@@ -540,9 +625,24 @@ export default function App() {
     if (audioRef.current) {
       audioRef.current.volume = 1.0;
       if (!wasAmbientMuted) {
-        audioRef.current.play().catch(e => console.error("Resume ambient err:", e));
+        audioRef.current.play().catch(e => {
+          if (e.name !== 'AbortError') console.error("Resume ambient err:", e);
+        });
       }
     }
+  };
+
+  const resetCreationState = () => {
+    setPrompt('');
+    setKeywords([]);
+    setKeywordInput('');
+    setCurrentChatId(null);
+    setStream([]);
+    setNarrationBlocks(null);
+    setLyriaMusicUrl(null);
+    setIsPlayingStory(false);
+    setCurrentBlockIndex(-1);
+    setIsSidebarOpen(false);
   };
 
   return (
@@ -556,100 +656,89 @@ export default function App() {
         playsInline
         className="background-video"
       >
-        <source src="/Loop Video.mp4" type="video/mp4" />
+        <source src="/LoopVideo.mp4" type="video/mp4" />
       </video>
       <div className="background-overlay"></div>
 
       <div className="app-layout">
-        {chatHistory.length > 0 && (
-          <aside className={`sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
-            <div className="sidebar-header">
-              <h2>📜 History</h2>
+        {/* Togglable Left Sidebar Navigation */}
+        <aside className={`sidebar ${!isSidebarOpen ? 'collapsed' : ''}`}>
+          <div className="sidebar-header">
+            <h2>TaleForge</h2>
+          </div>
+
+          <nav className="sidebar-nav">
+            <div className="nav-section-label">Story Lab</div>
+            <div 
+              className={`nav-item ${view === 'home' ? 'active' : ''}`}
+              onClick={() => { resetCreationState(); setView('home'); }}
+            >
+              📖 Create New
             </div>
-            <div className="sidebar-content">
-              {chatHistory.map((chat) => (
-                <div
-                  key={chat.id}
-                  className="history-card"
-                  onClick={() => loadHistoryItem(chat.id)}
-                  style={{ cursor: 'pointer' }}
-                  onMouseLeave={() => setOpenMenuId(null)}
+            <div 
+              className={`nav-item ${view === 'library' ? 'active' : ''}`}
+              onClick={() => { setView('library'); }}
+            >
+              📚 Library
+            </div>
+
+            <div className="nav-section-label">Visual Styles</div>
+            <div className="style-list">
+              {[
+                { name: 'Realistic', icon: '📸', img: 'https://picsum.photos/seed/realistic/400/250' },
+                { name: 'Cinematic', icon: '🎬', img: 'https://picsum.photos/seed/cinematic/400/250' },
+                { name: 'Ghibli', icon: '🎨', img: 'https://picsum.photos/seed/ghibli/400/250' },
+                { name: 'Noir', icon: '🕵️', img: 'https://picsum.photos/seed/noir/400/250' },
+                { name: 'Vaporwave', icon: '🌈', img: 'https://picsum.photos/seed/vaporwave/400/250' },
+                { name: 'Concept Art', icon: '🖼️', img: 'https://picsum.photos/seed/art/400/250' },
+              ].map(s => (
+                <div 
+                  key={s.name} 
+                  className={`style-item ${style === s.name ? 'active' : ''}`}
+                  onClick={() => setStyle(s.name)}
                 >
-                  <button
-                    className={`history-menu-btn ${openMenuId === chat.id ? 'active' : ''}`}
-                    onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === chat.id ? null : chat.id); }}
-                    title="Options"
-                  >
-                    ⋮
-                  </button>
-                  {openMenuId === chat.id && (
-                    <div className="history-dropdown">
-                      <button className="history-dropdown-item" onClick={(e) => handleShareChat(e, chat.id)}>
-                        🔗 Share Link
-                      </button>
-                      <button className="history-dropdown-item delete" onClick={(e) => handleDeleteChat(e, chat.id)}>
-                        🗑️ Delete
-                      </button>
-                    </div>
-                  )}
-                  <div className="history-meta">
-                    <span className="history-mode">{chat.mode}</span>
-                    <span className="history-date">{new Date(chat.created_at).toLocaleDateString()}</span>
-                  </div>
-                  <p className="history-prompt">{chat.prompt}</p>
+                  <img src={s.img} alt={s.name} />
+                  <span>{s.icon} {s.name}</span>
                 </div>
               ))}
             </div>
-          </aside>
-        )}
+          </nav>
+
+          <div className="sidebar-footer">
+            <button 
+              className={`music-toggle ${isMuted ? 'muted' : ''}`}
+              onClick={toggleMute}
+            >
+              {isMuted ? '🔇' : '🎵'} {isMuted ? 'Muted' : 'Ambient On'}
+            </button>
+          </div>
+        </aside>
 
         <div className="main-scroll-area">
-          {chatHistory.length > 0 && (
-            <button
-              className={`hamburger-btn ${isSidebarOpen ? 'sidebar-is-open' : ''}`}
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              title="Toggle History"
-            >
-              ☰
-            </button>
-          )}
-          <div className="container">
+          <button
+            className={`hamburger-btn ${isSidebarOpen ? 'sidebar-is-open' : ''}`}
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            title="Toggle Sidebar"
+          >
+            ☰
+          </button>
+          <div className={`container ${(view === 'library' || view === 'privacy' || view === 'terms') ? 'view-wide' : ''}`}>
             <div className="header">
               {view === 'generation' ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                   <button
                     className="back-button"
                     onClick={() => {
-                      setView('home');
+                      setView('library');
                       setStream([]);
                     }}
                   >
-                    ← New Story
+                    ← Library
                   </button>
                   <div style={{ flex: 1 }}></div>
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className={`music-toggle ${isMuted ? 'muted' : ''}`}
-                      onClick={toggleMute}
-                      title={isMuted ? "Unmute Atmosphere" : "Mute Atmosphere"}
-                    >
-                      {isMuted ? '🔇' : '🎵'}
-                      <span>{isMuted ? 'Muted' : 'Ambient On'}</span>
-                    </button>
-                  </div>
                 </div>
               ) : (
                 <>
-                  <div style={{ position: 'absolute', top: '1.5rem', right: '1.5rem' }}>
-                    <button
-                      className={`music-toggle ${isMuted ? 'muted' : ''}`}
-                      onClick={toggleMute}
-                      title={isMuted ? "Unmute Atmosphere" : "Mute Atmosphere"}
-                    >
-                      {isMuted ? '🔇' : '🎵'}
-                      <span>{isMuted ? 'Muted' : 'Ambient On'}</span>
-                    </button>
-                  </div>
                   <h1>TaleForge</h1>
                   <p>Advanced Multimodal Narrative Studio</p>
                 </>
@@ -667,293 +756,349 @@ export default function App() {
               <audio ref={lyriaAudioRef} src={lyriaMusicUrl || ''} loop style={{ display: 'none' }} />
             </div>
 
-            {view === 'home' && (
-              <div className="input-section">
-                <textarea
-                  placeholder={
-                    generationMode === 'Marketing Campaign' ? 'Describe your product/campaign... (e.g., A new organic energy drink called Volt)' :
-                      generationMode === 'Educational Explainer' ? 'What topic should we explain? (e.g., How quantum computing works)' :
-                        generationMode === 'Pitch Deck' ? 'What are you pitching? (e.g., A B2B SaaS for AI email management)' :
-                          generationMode === 'Workflow Planning' ? 'What process are we planning? (e.g., User onboarding flow)' :
-                            generationMode === 'Social Media Post' ? 'What is the subject of your post? (e.g., A behind-the-scenes look at our cafe)' :
-                              'What\'s your story idea? (Or leave blank and just use keywords!)'
-                  }
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  className="base-input prompt-textarea"
-                />
-
-                <div className="keyword-section">
-                  <input
-                    type="text"
-                    placeholder="Add keywords (press Enter)..."
-                    value={keywordInput}
-                    onChange={(e) => setKeywordInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && keywordInput.trim()) {
-                        if (!keywords.includes(keywordInput.trim())) {
-                          setKeywords([...keywords, keywordInput.trim()]);
-                        }
-                        setKeywordInput('');
-                        e.preventDefault();
-                      }
-                    }}
-                  />
-                  <div className="chips">
-                    {keywords.map((k, i) => (
-                      <span key={i} className="chip">
-                        {k}
-                        <button
-                          onClick={() => setKeywords(keywords.filter((_, idx) => idx !== i))}
-                          className="chip-remove"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                  </div>
+            {view === 'library' && (
+              <div className="library-section">
+                <h1>Story Library</h1>
+                <p>Your collection of forged narratives.</p>
+                <div className="gallery-grid">
+                  {chatHistory.length === 0 ? (
+                    <div className="no-history">Your library is empty. Start forging!</div>
+                  ) : (
+                    chatHistory.map((chat) => {
+                      const progress = getStoryProgress(chat.id);
+                      return (
+                        <div key={chat.id} className="story-card" onClick={() => loadHistoryItem(chat.id)}>
+                          <img 
+                            src={`https://picsum.photos/seed/${chat.id}/400/250`} 
+                            alt={chat.prompt.substring(0, 50) + '...'} 
+                          />
+                          <div className="card-overlay">
+                            <div className="card-meta">
+                              <span>{chat.mode}</span>
+                              <span>{new Date(chat.created_at).toLocaleDateString()}</span>
+                            </div>
+                            <h3 className="card-title">{chat.prompt}</h3>
+                            <div className="card-footer">
+                              <span>{progress === 100 ? 'Forged' : progress > 0 ? `${progress}% Complete` : 'New Story'}</span>
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button 
+                                  onClick={(e) => handleShareChat(e, chat.id)}
+                                  style={{ padding: '0.25rem', background: 'transparent', boxShadow: 'none' }}
+                                  title="Share"
+                                >
+                                  🔗
+                                </button>
+                                <button 
+                                  onClick={(e) => handleDeleteChat(e, chat.id)}
+                                  style={{ padding: '0.25rem', background: 'transparent', boxShadow: 'none', color: '#ef4444' }}
+                                  title="Delete"
+                                >
+                                  🗑️
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="card-progress-container">
+                            <div className="card-progress-fill" style={{ width: `${progress}%` }}></div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
+              </div>
+            )}
 
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1rem' }}>
-                  <select
-                    value={generationMode}
-                    onChange={(e) => setGenerationMode(e.target.value)}
-                    style={{ padding: '0.75rem', borderRadius: '0.5rem', background: '#334155', color: 'white', fontWeight: 'bold' }}
-                  >
-                    <option value="Storybook">📖 Storybook</option>
-                    <option value="Marketing Campaign">📈 Marketing Campaign</option>
-                    <option value="Educational Explainer">🎓 Educational Explainer</option>
-                    <option value="Pitch Deck">📊 Pitch Deck</option>
-                    <option value="Workflow Planning">⚙️ Workflow Planning</option>
-                    <option value="Social Media Post">📱 Social Media Post</option>
-                  </select>
-                  {generationMode === 'Storybook' && (
-                    <select
-                      value={style}
-                      onChange={(e) => setStyle(e.target.value)}
-                      style={{ padding: '0.75rem', borderRadius: '0.5rem', background: '#334155', color: 'white' }}
+            {view === 'privacy' && (
+              <div className="legal-section markdown-prose">
+                <h1>Privacy Policy</h1>
+                <p>Last Updated: March 2024</p>
+                <p>At TaleForge, we respect your privacy and are committed to protecting your personal data.</p>
+                <h2>1. Data Collection</h2>
+                <p>We collect information you provide directly, such as story prompts and account details. We also collect automated data through cookies to improve our AI generation performance.</p>
+                <h2>2. AI Processing</h2>
+                <p>Your story prompts are processed by our AI models (Gemini, Vertex AI). While we use these to generate content, we do not sell your personal prompts to third parties.</p>
+                <button className="back-button" onClick={() => setView('home')}>Back to Home</button>
+              </div>
+            )}
+
+            {view === 'terms' && (
+              <div className="legal-section markdown-prose">
+                <h1>Terms of Service</h1>
+                <p>Last Updated: March 2024</p>
+                <p>By using TaleForge, you agree to these terms.</p>
+                <h2>1. Use of Service</h2>
+                <p>You agree to use TaleForge only for lawful purposes. You are responsible for the content you generate and must ensure it does not infringe on any third-party rights.</p>
+                <h2>2. Intellectual Property</h2>
+                <p>Content generated by our AI is subject to the terms of the underlying models. Generally, you own the creative output, but TaleForge retains the right to use generated assets for platform improvement.</p>
+                <button className="back-button" onClick={() => setView('home')}>Back to Home</button>
+              </div>
+            )}
+
+            {view === 'home' && (
+              <div className="forge-section">
+                <h1>Forge New Story</h1>
+                <p>Unleash your imagination into the digital canvas.</p>
+                <div className="input-section">
+                  <textarea
+                    placeholder={
+                      generationMode === 'Marketing Campaign' ? 'Describe your product/campaign... (e.g., A new organic energy drink called Volt)' :
+                        generationMode === 'Educational Explainer' ? 'What topic should we explain? (e.g., How quantum computing works)' :
+                          generationMode === 'Pitch Deck' ? 'What are you pitching? (e.g., A B2B SaaS for AI email management)' :
+                            generationMode === 'Workflow Planning' ? 'What process are we planning? (e.g., User onboarding flow)' :
+                              generationMode === 'Social Media Post' ? 'What is the subject of your post? (e.g., A behind-the-scenes look at our cafe)' :
+                                'What\'s your story idea? (Or leave blank and just use keywords!)'
+                    }
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    className="base-input prompt-textarea"
+                  />
+
+                  <div className="keyword-section">
+                    <input
+                      type="text"
+                      placeholder="Add keywords (press Enter)..."
+                      value={keywordInput}
+                      onChange={(e) => setKeywordInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && keywordInput.trim()) {
+                          if (!keywords.includes(keywordInput.trim())) {
+                            setKeywords([...keywords, keywordInput.trim()]);
+                          }
+                          setKeywordInput('');
+                          e.preventDefault();
+                        }
+                      }}
+                    />
+                    <div className="chips">
+                      {keywords.map((k, i) => (
+                        <span key={i} className="chip">
+                          {k}
+                          <button
+                            onClick={() => setKeywords(keywords.filter((_, idx) => idx !== i))}
+                            className="chip-remove"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '1.5rem' }}>
+                    <div className="select-wrapper">
+                      <label>Objective</label>
+                      <select
+                        value={generationMode}
+                        onChange={(e) => setGenerationMode(e.target.value)}
+                      >
+                        <option value="Storybook">📖 Storybook</option>
+                        <option value="Marketing Campaign">📈 Marketing Campaign</option>
+                        <option value="Educational Explainer">🎓 Educational Explainer</option>
+                        <option value="Pitch Deck">📊 Pitch Deck</option>
+                        <option value="Workflow Planning">⚙️ Workflow Planning</option>
+                        <option value="Social Media Post">📱 Social Media Post</option>
+                        <option value="Presentation">📊 AI Presentation</option>
+                      </select>
+                    </div>
+
+                    <div className="select-wrapper">
+                      <label>Complexity</label>
+                      <select
+                        value={duration}
+                        onChange={(e) => setDuration(e.target.value)}
+                      >
+                        <option value="Short">Short (Fast)</option>
+                        <option value="Medium">Medium (Balanced)</option>
+                        <option value="Large">Large (Detailed)</option>
+                      </select>
+                    </div>
+
+                    <div style={{ flex: 1 }}></div>
+
+                    <button
+                      className="surprise-btn"
+                      onClick={handleSurpriseMe}
+                      disabled={loading}
                     >
-                      <option value="Auto">✨ Auto Detect (AI Chosen)</option>
-                      <option value="Cinematic">🎬 Cinematic</option>
-                      <option value="Epic Fantasy">⚔️ Epic Fantasy</option>
-                      <option value="Sci-Fi Noir">🌌 Sci-Fi Noir</option>
-                      <option value="Political Drama">⚖️ Political Drama</option>
-                      <option value="Space Opera">🚀 Space Opera</option>
-                      <option value="Mystery">🔍 Mystery</option>
-                      <option value="Comedy">🎭 Comedy</option>
-                      <option value="Thriller">🔪 Thriller</option>
-                    </select>
-                  )}
-                  {generationMode === 'Storybook' && (
-                    <select
-                      value={duration}
-                      onChange={(e) => setDuration(e.target.value)}
-                      style={{ padding: '0.75rem', borderRadius: '0.5rem', background: '#334155', color: 'white' }}
-                    >
-                      <option value="Short">Short (5 mins / ~2p)</option>
-                      <option value="Medium">Medium (~30 pages)</option>
-                      <option value="Large">Large (~100 pages)</option>
-                    </select>
-                  )}
-                  <button
-                    onClick={handleSurpriseMe}
-                    disabled={loading}
-                    style={{ background: '#4b5563', borderColor: '#4b5563' }}
-                  >
-                    Surprise Me
-                  </button>
-                  <button onClick={handleSubmit} disabled={loading}>
+                      ✨ Surprise Me
+                    </button>
+                    <button className="primary-forge-btn" onClick={handleSubmit} disabled={loading}>
                     {loading ? 'Forging...' : 'Forge Content'}
-                  </button>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
 
             {view === 'generation' && (
-              <div className="output-section">
-                {stream.length > 0 && (
-                  <div className="output-header" style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
+              <div className="viewing-container">
+                <div className={`generation-view-layout ${!hasVisuals ? 'no-media' : ''}`}>
+                  {/* Left Pane: Reading */}
+                  <div className="generation-reading-pane">
+                    {narrationBlocks && !loading ? (
+                      <div className="synced-text-container text-part">
+                        {narrationBlocks.map((block) => {
+                          let cleanText = block.text;
+                          cleanText = cleanText.replace(/\[IMAGE_PROMPT:.*?\]/gis, '')
+                            .replace(/\[VIDEO_PROMPT:.*?\]/gis, '')
+                            .replace(/\[MUSIC_STYLE:.*?\]/gis, '')
+                            .replace(/\[MIRO_DIAGRAM\].*?\[\/MIRO_DIAGRAM\]/gis, '')
+                            .replace(/\[MIRO_DIAGRAM\].*?$/gis, '');
+                          return (
+                            <p
+                              key={block.index}
+                              className={`story-block ${currentBlockIndex === block.index ? 'highlighted' : (isPlayingStory && currentBlockIndex > block.index) ? 'read' : ''}`}
+                            >
+                              {cleanText}
+                            </p>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="raw-stream text-part">
+                        <ReactMarkdown>
+                          {stream
+                            .filter(p => p.type === 'text')
+                            .map(p => p.content)
+                            .join('')
+                            .replace(/\[IMAGE_PROMPT:.*?\]/gis, '')
+                            .replace(/\[VIDEO_PROMPT:.*?\]/gis, '')
+                            .replace(/\[MUSIC_STYLE:.*?\]/gis, '')
+                            .replace(/\[MIRO_DIAGRAM\].*?\[\/MIRO_DIAGRAM\]/gis, '')
+                            .replace(/\[MIRO_DIAGRAM\].*?$/gis, '')}
+                        </ReactMarkdown>
+                      </div>
+                    )}
 
-                    {narrationBlocks && (
-                      <button
-                        className="play-story-btn"
-                        onClick={isPlayingStory ? stopStory : startStory}
-                        style={{
-                          background: isPlayingStory ? '#ef4444' : '#4f46e5',
-                          color: 'white',
-                          padding: '0.6rem 1.2rem',
-                          borderRadius: '999px',
-                          border: 'none',
-                          fontWeight: 'bold',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          boxShadow: 'var(--shadow-md)'
-                        }}
-                      >
-                        {isPlayingStory ? 'Stop' : 'Listen Story'}
-                      </button>
+                    {loading && <div className="loading-indicator">Forging your vision...</div>}
+                    
+                    {/* Info Messages from Backend */}
+                    {stream
+                      .filter(p => p.type === 'info')
+                      .map((p, idx) => (
+                        <div key={idx} className="info-message-stream" style={{ color: 'var(--primary)', fontStyle: 'italic', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                          ✨ {p.content}
+                        </div>
+                      ))}
+
+                    <div ref={streamEndRef} />
+
+                    {/* Continuation Section */}
+                    {currentChatId && !loading && (
+                      <div className="continue-section">
+                        <h3>Deepen the Narrative...</h3>
+                        <textarea
+                          placeholder="What detail should we explore next?"
+                          value={continueInput}
+                          onChange={(e) => setContinueInput(e.target.value)}
+                        />
+                        <button onClick={handleContinue} disabled={!continueInput.trim()}>
+                          Forge Continuation
+                        </button>
+                      </div>
                     )}
                   </div>
-                )}
 
-                {/* Once we have narrationBlocks, we hide the raw text stream and render the blocks to support highlighting */}
-                <div className="content-container">
-                  {narrationBlocks && !loading ? (
-                    <div className="synced-text-container text-part">
-                      {narrationBlocks.map((block) => {
-                        let cleanText = block.text;
-                        // Fallback frontend strip for narration playback text as well
-                        cleanText = cleanText.replace(/\[IMAGE_PROMPT:.*?\]/gis, '')
-                          .replace(/\[VIDEO_PROMPT:.*?\]/gis, '')
-                          .replace(/\[MUSIC_STYLE:.*?\]/gis, '')
-                          .replace(/\[MIRO_DIAGRAM\].*?\[\/MIRO_DIAGRAM\]/gis, '')
-                          .replace(/\[MIRO_DIAGRAM\].*?$/gis, '');
-                        return (
-                          <p
-                            key={block.index}
-                            className={`story-block ${currentBlockIndex === block.index ? 'highlighted' : (isPlayingStory && currentBlockIndex > block.index) ? 'read' : ''}`}
-                            style={{ marginBottom: '1rem' }}
-                          >
-                            {cleanText}
-                          </p>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    (() => {
-                      const merged: any[] = [];
-                      let currentText = "";
-
-                      const invisibleTypes = ['history_meta', 'music', 'narration_track'];
-
-                      stream.forEach((part, index) => {
-                        if (part.type === 'text') {
-                          currentText += part.content;
-                        } else if (invisibleTypes.includes(part.type)) {
-                          merged.push({ ...part, key: `part-${index}` });
-                        } else {
-                          if (currentText) {
-                            merged.push({ type: 'text', content: currentText, key: `text-${index}` });
-                            currentText = "";
-                          }
-                          merged.push({ ...part, key: `part-${index}` });
-                        }
-                      });
-                      if (currentText) {
-                        merged.push({ type: 'text', content: currentText, key: 'text-end' });
-                      }
-
-                      return (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-                          {merged
-                            .filter(p => !invisibleTypes.includes(p.type))
-                            .map((part) => {
-                              let cleanContent = part.content;
-                              if (part.type === 'text' && typeof cleanContent === 'string') {
-                                // Fallback frontend strip: hide any leaked systemic instructions or prompts
-                                cleanContent = cleanContent.replace(/\[IMAGE_PROMPT:.*?\]/gis, '')
-                                  .replace(/\[VIDEO_PROMPT:.*?\]/gis, '')
-                                  .replace(/\[MUSIC_STYLE:.*?\]/gis, '')
-                                  .replace(/\[MIRO_DIAGRAM\].*?\[\/MIRO_DIAGRAM\]/gis, '')
-                                  .replace(/\[MIRO_DIAGRAM\].*?$/gis, ''); // Catch trailing unfinished ones
-                              }
-
-                              return (
-                                <div key={part.key} className={`content-part ${part.type}-part`}>
-                                  {part.type === 'text' && <div className="markdown-prose"><ReactMarkdown>{cleanContent}</ReactMarkdown></div>}
-                                  {part.type === 'image' && <img src={part.content} alt="Generated scene" />}
-                                  {part.type === 'audio' && <audio controls autoPlay className="audio-part" src={part.content} />}
-                                  {part.type === 'video' && <div className="video-part"><video controls autoPlay src={part.content} /></div>}
-                                  {part.type === 'blueprint' && (
-                                    <div className="blueprint-part" style={{ marginTop: '2rem', marginBottom: '2rem', height: '600px', width: '100%', borderRadius: '1rem', overflow: 'hidden', border: '1px solid var(--glass-border)' }}>
-                                      <div style={{ padding: '0.75rem 1rem', background: '#1e293b', borderBottom: '1px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <span>🗺️ <strong>Interactive Miro Diagram</strong></span>
-                                        <a href={part.content?.replace('live-embed', 'board').split('?')[0] || '#'} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: '#94a3b8', textDecoration: 'underline' }}>Open Fullscreen</a>
-                                      </div>
-                                      <iframe
-                                        src={part.content}
-                                        style={{ width: '100%', height: 'calc(100% - 45px)', border: 'none' }}
-                                        allowFullScreen
-                                        allow="fullscreen; clipboard-read; clipboard-write"
-                                      />
-                                    </div>
-                                  )}
-                                  {part.type === 'info' && <div className="info-part">✨ {part.content}</div>}
-                                  {part.type === 'error' && <div style={{ color: '#ef4444' }}>{part.content}</div>}
-                                </div>
-                              );
-                            })}
-                        </div>
-                      );
-                    })()
-                  )}
-
-                  {/* Always render media generated (images/video/blueprints) at bottom if we hid the stream for synced text */}
-                  {narrationBlocks && !loading && stream.filter(p => !['text', 'info', 'error', 'music'].includes(p.type)).map((part, idx) => (
-                    <div key={`media-${idx}`} className={`content-part ${part.type}-part`}>
-                      {part.type === 'image' && <img src={part.content} alt="Generated scene" />}
-                      {part.type === 'video' && <div className="video-part"><video controls autoPlay={!isPlayingStory} src={part.content} /></div>}
-                      {part.type === 'blueprint' && (
-                        <div className="blueprint-part" style={{ marginTop: '2rem', marginBottom: '2rem', height: '600px', width: '100%', borderRadius: '1rem', overflow: 'hidden', border: '1px solid var(--glass-border)' }}>
-                          <div style={{ padding: '0.75rem 1rem', background: '#1e293b', borderBottom: '1px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span>🗺️ <strong>Interactive Miro Diagram</strong></span>
-                            <a href={part.content?.replace('live-embed', 'board').split('?')[0] || '#'} target="_blank" rel="noreferrer" style={{ fontSize: '0.85rem', color: '#94a3b8', textDecoration: 'underline' }}>Open Fullscreen</a>
+                  {/* Right Pane: Media / Visuals - Only show if visuals exist */}
+                  {hasVisuals && (
+                    <div className="generation-media-pane">
+                      <div className="image-grid">
+                        {stream
+                          .filter(p => p.type === 'image')
+                          .map((p, idx) => (
+                            <img key={idx} src={p.content} alt={`Scene ${idx + 1}`} />
+                          ))}
+                      </div>
+                      {stream
+                        .filter(p => p.type === 'video')
+                        .map((p, idx) => (
+                          <div key={idx} className="video-part">
+                            <video src={p.content} loop autoPlay playsInline />
                           </div>
-                          <iframe
-                            src={part.content}
-                            style={{ width: '100%', height: 'calc(100% - 45px)', border: 'none' }}
-                            allowFullScreen
-                            allow="fullscreen; clipboard-read; clipboard-write"
-                          />
-                        </div>
-                      )}
+                        ))}
+                      {stream
+                        .filter(p => p.type === 'blueprint')
+                        .map((p, idx) => (
+                          <div key={idx} className="blueprint-part" style={{ height: '400px', marginBottom: '1rem' }}>
+                            <iframe src={p.content} style={{ width: '100%', height: '100%', border: 'none' }} />
+                          </div>
+                        ))}
                     </div>
-                  ))}
+                  )}
                 </div>
 
-                {loading && <div className="loading-indicator">Forging your vision...</div>}
-                <div ref={streamEndRef} />
+                {/* Bottom Playback Control Bar */}
+                <div className={`playback-controls-bar ${stream.length > 0 ? 'active' : ''}`}>
+                  <div className="control-group">
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'white' }}>Now Playing</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{prompt.substring(0, 30)}...</span>
+                    </div>
+                  </div>
 
-                {/* Continue Chat Section */}
-                {currentChatId && !loading && (
-                  <div className="continue-section" style={{ marginTop: '2rem', padding: '1.5rem', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '1rem', border: '1px solid var(--glass-border)' }}>
-                    <h3 style={{ marginTop: 0, marginBottom: '1rem', color: '#f8fafc' }}>Continue the Tale...</h3>
-                    <textarea
-                      style={{ width: '100%', padding: '1rem', borderRadius: '0.5rem', background: 'rgba(15, 23, 42, 0.8)', color: 'white', border: '1px solid #475569', minHeight: '80px', marginBottom: '1rem' }}
-                      placeholder="What happens next? Or what detail should we zoom in on?"
-                      value={continueInput}
-                      onChange={(e) => setContinueInput(e.target.value)}
-                    />
-                    <button
-                      onClick={handleContinue}
-                      disabled={!continueInput.trim()}
-                      style={{ background: continueInput.trim() ? '#3b82f6' : '#475569' }}
+                  <div className="control-group">
+                    <button 
+                      className="play-btn-large" 
+                      onClick={isPlayingStory ? stopStory : startStory}
+                      disabled={!narrationBlocks || narrationBlocks.length === 0}
+                      title={!narrationBlocks ? "Narration is being forged..." : "Play Story"}
                     >
-                      Forge Continuation
+                      {isPlayingStory ? '⏸' : '▶'}
                     </button>
+                    {!narrationBlocks && <span style={{ fontSize: '0.7rem', color: 'var(--primary)' }}>Forging Voice...</span>}
                   </div>
-                )}
-                <footer className="app-footer">
-                  <div className="footer-content">
-                    <div className="footer-brand">
-                      <h3>TaleForge</h3>
-                      <p>Powered by Google Genesis-Stack & Vertex AI</p>
+
+                  <div className="control-group">
+                    <div className="volume-slider">
+                      <span>Voice</span>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1" 
+                        value={voiceVolume} 
+                        onChange={(e) => setVoiceVolume(parseFloat(e.target.value))}
+                      />
                     </div>
-                    <div className="footer-links">
-                      <span>v2.0.4-beta</span>
-                      <span>•</span>
-                      <span>System Status: <span className="status-indicator">Online</span></span>
-                      <span>•</span>
-                      <a href="https://github.com/SHADOW-0602/TaleForge" target="_blank" rel="noopener noreferrer">Documentation</a>
+                    <div className="volume-slider">
+                      <span>Ambient</span>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.1" 
+                        value={ambientVolume} 
+                        onChange={(e) => setAmbientVolume(parseFloat(e.target.value))}
+                      />
                     </div>
-                    <div className="footer-credit">
-                      Built with ❤️ by the SHADOW
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button className="back-button" onClick={() => { setView('library'); setStream([]); }} style={{ marginTop: 0 }}>
+                        Done
+                      </button>
                     </div>
                   </div>
-                </footer>
+                </div>
               </div>
             )}
+            <footer className="app-footer">
+              <div className="footer-content">
+                <div className="footer-brand">
+                  <h3>TaleForge</h3>
+                  <p>Master the art of digital storytelling.</p>
+                </div>
+                <div className="footer-links">
+                  <span className="footer-link" onClick={() => setView('privacy')}>Privacy</span>
+                  <span className="footer-link" onClick={() => setView('terms')}>Terms</span>
+                  <div className="status-indicator" title="All systems operational">
+                    Live
+                  </div>
+                </div>
+                <div className="footer-credit">
+                  © 2024 TaleForge AI. Forged with passion.
+                </div>
+              </div>
+            </footer>
           </div>
         </div>
       </div>
