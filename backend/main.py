@@ -40,13 +40,15 @@ class KeywordRequest(BaseModel):
     keywords: list[str]
 
 @app.websocket("/ws/generate")
-async def generate_story_ws(websocket: WebSocket):
+async def generate_tale_ws(websocket: WebSocket):
     await websocket.accept()
+    print("WS Connection Accepted. Waiting for payload...", flush=True)
     try:
         # Wait for the initial configuration
         config_data = await websocket.receive_text()
         request_dict = json.loads(config_data)
-        
+        print(f"Payload parsed. Prompt: {request_dict.get('prompt', '')[:50]}...", flush=True)
+
         prompt = request_dict.get("prompt", "")
         mode = request_dict.get("mode", "Storybook")
         style = request_dict.get("style", "Cinematic")
@@ -108,6 +110,8 @@ async def generate_story_ws(websocket: WebSocket):
                 elif part.get("type") in ["image", "video", "audio", "blueprint", "narration_track"]:
                     assets.append(part)
                 await websocket.send_json(part)
+            
+            print(f"Generator loop finished. Total text length: {len(full_text)}, Assets: {len(assets)}", flush=True)
                 
             # Fire and forget the final commit
             if full_text or assets:

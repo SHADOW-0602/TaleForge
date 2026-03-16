@@ -39,6 +39,28 @@ Experience structured content as it unfolds with interleaved assets:
 
 ---
 
+## 📂 Project Structure
+
+```text
+TaleForge/
+├── backend/                # FastAPI Application
+│   ├── main.py            # API Entry point & WebSocket handler
+│   ├── gemini_client.py    # Multi-client rotation & AI integration
+│   ├── database.py         # Cloudflare D1 integration
+│   ├── Dockerfile          # Production container config
+│   └── requirements.txt    # Python dependencies
+├── frontend/               # React + TypeScript App
+│   ├── src/               # UI Components & Logic
+│   ├── public/            # Static assets
+│   ├── Dockerfile         # Frontend container config
+│   └── package.json        # Node dependencies
+├── TaleForge_Architecture.md # Mermaid source for diagrams
+├── TaleForge_Story.txt      # Project narrative & tech details
+└── README.md                # Project documentation
+```
+
+---
+
 ## 🏗️ Technical Architecture
 
 - **Backend**: Python (FastAPI), Google Gen AI SDK, Miro REST API, Docker.
@@ -48,6 +70,50 @@ Experience structured content as it unfolds with interleaved assets:
 - **Audio**: Google Cloud Text-to-Speech (Neural2/Studio Engine).
 - **Hosting**: Google Cloud Run + Artifact Registry.
 - **CI/CD**: Google Cloud Build & Artifact Registry.
+TaleForge uses a streaming multimodal architecture to deliver content in real-time.
+
+```mermaid
+graph TD
+    subgraph "Frontend Layer (React + Vite)"
+        Client["User Browser"]
+        React["React Components"]
+        WS_Client["WebSocket Client"]
+    end
+
+    subgraph "Infrastructure Layer (Google Cloud)"
+        Run["Google Cloud Run (Hosting)"]
+        GCS["Google Cloud Storage (Asset Hub)"]
+    end
+
+    subgraph "Backend Layer (Python + FastAPI)"
+        FastAPI["FastAPI App"]
+        GeminiClient["Gemini Client (Rotation Logic)"]
+    end
+
+    subgraph "AI Services Layer"
+        Gemini["Gemini 2.0 Flash (Text/Narrative)"]
+        Veo["Vertex AI Veo 3.1 (Cinematic Video)"]
+        Imagen["Vertex AI Imagen 3 (Images)"]
+        TTS["Google Cloud TTS (Narration)"]
+    end
+
+    %% Connections
+    Client <--> React
+    React <--> WS_Client
+    WS_Client <-->|WebSockets| Run
+    Run --- FastAPI
+    FastAPI <--> GeminiClient
+    GeminiClient <--> Gemini
+    GeminiClient <--> Veo
+    GeminiClient <--> Imagen
+    GeminiClient <--> TTS
+    
+    %% Assets Flow
+    Veo -->|Upload| GCS
+    Imagen -->|Upload| GCS
+    TTS -->|Upload| GCS
+    GCS -.->|Serve URL| React
+```
 
 ---
 

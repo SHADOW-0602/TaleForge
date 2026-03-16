@@ -1,4 +1,4 @@
-.env
+# .env used to be here, but we need it for Cloud Run source deployment to work with load_dotenv()
 __pycache__
 *.pyc
 .git

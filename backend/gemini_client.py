@@ -30,22 +30,25 @@ class GeminiClient:
         for i in range(1, 6):
             key = os.getenv(f"GEMINI_API_KEY_{i}")
             if key:
-                self.all_clients.append(genai.Client(api_key=key))
+                try:
+                    self.all_clients.append(genai.Client(api_key=key))
+                except Exception as e:
+                    print(f"Failed to initialize Gemini Client {i}: {e}")
+        
+        print(f"Initialized {len(self.all_clients)} Gemini API clients.", flush=True)
+
         # Optional Vertex AI fallback client
         self.vertex_client = None
         if self.project and self.location:
             try:
-                vertex_token = os.environ.get("VERTEX_API_KEY", "")
-                http_opts = {'headers': {'Authorization': f'Bearer {vertex_token}'}} if vertex_token else None
                 self.vertex_client = genai.Client(
                     vertexai=True,
                     project=self.project,
-                    location=self.location,
-                    http_options=http_opts
+                    location=self.location
                 )
-                print(f"Vertex AI Client initialized in {self.location}")
+                print(f"Vertex AI Client initialized in project {self.project}, location {self.location}", flush=True)
             except Exception as e:
-                print(f"Failed to initialize Vertex AI Client: {e}")
+                print(f"Failed to initialize Vertex AI Client: {e}", flush=True)
 
         # Native Google Cloud Clients
         self.tts_client = texttospeech.TextToSpeechClient()
@@ -87,10 +90,11 @@ class GeminiClient:
             clients = self.all_clients
             
         if self.vertex_client:
-            if role in ["video"]:
-                 clients = [self.vertex_client] + clients # Vertex first for specialized models
-            else:
-                 clients.append(self.vertex_client)
+            # Prioritize Vertex AI for all roles to ensure project quota is used first
+            clients = [self.vertex_client] + clients
+        
+        # Unify model to gemini-2.0-flash for consistency across all clients
+        target_model = "gemini-2.0-flash" if model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"] else model
         
         config = types.GenerateContentConfig(
             system_instruction=system_instr,
@@ -99,29 +103,32 @@ class GeminiClient:
         
         for client in clients:
             if not client: continue
-            try:
-                # Specific model overrides for Vertex AI if needed
-                active_model = model
-                is_vertex = getattr(client, 'vertexai', False)
-                if is_vertex:
-                    # Map standard names to Vertex-specific names
-                    vertex_mapping = {
-                        "gemini-1.5-flash": "gemini-2.0-flash-001",
-                        "gemini-1.5-pro": "gemini-2.5-pro",
-                        "gemini-2.0-flash": "gemini-2.0-flash-001",
-                        "veo-001": "veo-3.1-generate-001"
-                    }
-                    mapped_model = vertex_mapping.get(model, model)
-                    if "publishers/google/models/" not in mapped_model:
-                        active_model = f"publishers/google/models/{mapped_model}"
-                    else:
-                        active_model = mapped_model
+            is_vertex = (client == self.vertex_client)
+            # Specific model overrides for Vertex AI if needed
+            active_model = model
+            # Map standard names to Vertex-specific names
+            vertex_mapping = {
+                "gemini-1.5-flash": "gemini-2.0-flash-001",
+                "gemini-2.0-flash": "gemini-2.0-flash-001",
+                "veo-3.1-generate-001": "veo-3.1-generate-001"
+            }
+            mapped_model = vertex_mapping.get(target_model, target_model)
+            if is_vertex:
+                if "publishers/google/models/" not in mapped_model:
+                    active_model = f"publishers/google/models/{mapped_model}"
+                else:
+                    active_model = mapped_model
+            else:
+                active_model = target_model
 
+            print(f"Attempting '{role}' on {type(client).__name__} (Vertex={is_vertex}, Model={active_model})", flush=True)
+            try:
                 response = await client.aio.models.generate_content(
                     model=active_model,
                     contents=prompt,
                     config=config
                 )
+                print(f"'{role}' Succeeded on {type(client).__name__} (Vertex={is_vertex})", flush=True)
                 return response
             except Exception as e:
                 err_msg = str(e).upper()
@@ -148,10 +155,8 @@ class GeminiClient:
             clients = self.all_clients
             
         if self.vertex_client:
-            if role in ["video"]:
-                 clients = [self.vertex_client] + clients # Vertex first for specialized models
-            else:
-                 clients.append(self.vertex_client)
+            # Put Vertex first for all streaming generation
+            clients = [self.vertex_client] + clients
         
         config = types.GenerateContentConfig(
             system_instruction=system_instr,
@@ -160,30 +165,31 @@ class GeminiClient:
         
         for client in clients:
             if not client: continue
-            try:
-                # Specific model overrides for Vertex AI if needed
+            is_vertex = (client == self.vertex_client)
+            # Specific model overrides for Vertex AI if needed
+            active_model = model
+            vertex_mapping = {
+                "gemini-1.5-flash": "gemini-2.0-flash-001",
+                "gemini-2.0-flash": "gemini-2.0-flash-001"
+            }
+            mapped_model = vertex_mapping.get(model, model)
+            if is_vertex:
+                if "publishers/google/models/" not in mapped_model:
+                    active_model = f"publishers/google/models/{mapped_model}"
+                else:
+                    active_model = mapped_model
+            else:
                 active_model = model
-                is_vertex = getattr(client, 'vertexai', False)
-                if is_vertex:
-                    # Map standard names to Vertex-specific names
-                    vertex_mapping = {
-                        "gemini-1.5-flash": "gemini-2.0-flash-001",
-                        "gemini-1.5-pro": "gemini-2.5-pro",
-                        "gemini-2.0-flash": "gemini-2.0-flash-001",
-                        "gemini-2.5-flash": "gemini-2.5-flash"
-                    }
-                    mapped_model = vertex_mapping.get(model, model)
-                    if "publishers/google/models/" not in mapped_model:
-                        active_model = f"publishers/google/models/{mapped_model}"
-                    else:
-                        active_model = mapped_model
 
+            print(f"Attempting stream '{role}' on {type(client).__name__} (Vertex={is_vertex}, Model={active_model})", flush=True)
+            try:
                 async for chunk in await client.aio.models.generate_content_stream(
                     model=active_model,
                     contents=prompt,
                     config=config
                 ):
                     yield chunk
+                print(f"Stream '{role}' Completed on {type(client).__name__} (Vertex={is_vertex})", flush=True)
                 return # Successful stream
             except Exception as e:
                 err_msg = str(e).upper()
@@ -263,12 +269,22 @@ class GeminiClient:
             # If no blocks (empty text), return None
             if not raw_blocks: return None
 
+            # Derive language code dynamically from the voice name (e.g., 'en-gb' from 'en-GB-Neural2-B')
+            # Exact mapping is preferred to avoid "en-US" vs "en-gb" mismatch errors
+            name_parts = voice_profile["name"].split("-")
+            derived_lang = "-".join(name_parts[:2])
+            # Google Cloud TTS is case-sensitive for some regions but usually expects it to match the voice exactly
+            # Let's use the first two parts exactly as they appear in the name (e.g. "en-GB")
+            lang_code = derived_lang
+            if not lang_code: lang_code = "en-US"
+                
             async def synthesize_one(index: int, block_text: str):
                 synthesis_input = texttospeech.SynthesisInput(text=block_text)
                 voice = texttospeech.VoiceSelectionParams(
-                    language_code="en-US",
+                    language_code=lang_code,
                     name=voice_profile["name"]
                 )
+                print(f"Synthesizing block {index} with voice {voice_profile['name']} and lang {lang_code}")
                 audio_config = texttospeech.AudioConfig(
                     audio_encoding=texttospeech.AudioEncoding.MP3,
                     pitch=0.0,
@@ -302,8 +318,8 @@ class GeminiClient:
 
     async def _generate_flash_image(self, prompt: str):
         try:
-            # Reverted to stable gemini-1.5-flash
-            model_id = "gemini-1.5-flash"
+            # Upgrade to newer stable model for better reliability
+            model_id = "gemini-2.0-flash"
             
             # Use _safe_generate to handle rotation and errors
             response = await self._safe_generate("image", prompt, model=model_id)
@@ -319,10 +335,11 @@ class GeminiClient:
                     # Support for SDK's as_image() helper if PIL is available
                     try:
                         img = part.as_image()
-                        buf = io.BytesIO()
-                        img.save(buf, format="PNG")
-                        image_bytes = buf.getvalue()
-                        break
+                        if img:
+                            buf = io.BytesIO()
+                            img.save(buf, format="PNG")
+                            image_bytes = buf.getvalue()
+                            break
                     except Exception as pil_err:
                         print(f"PIL Conversion Error: {pil_err}")
             
@@ -364,25 +381,37 @@ class GeminiClient:
                     ref_prompts = json.loads(text)
                 except: pass
             
-            # 2. Generate reference images using gemini-1.5-flash
+            # 2. Generate reference images using gemini-2.0-flash (mapping to 2.0 on Vertex)
             references = []
             for ref_p in ref_prompts[:3]:
-                img_res = await self._safe_generate("image", ref_p, model="gemini-1.5-flash")
+                # Explicitly request IMAGE modality if supported, or rely on part detection
+                img_res = await self._safe_generate("image", ref_p, model="gemini-2.0-flash")
                 if img_res:
                     for part in img_res.parts:
-                        # Fixed: use safe access for multimodal parts
-                        if hasattr(part, "as_image"):
+                        image_data = None
+                        if part.inline_data:
+                            image_data = part.inline_data.data
+                        elif hasattr(part, "as_image"):
                             try:
                                 img = part.as_image()
-                                references.append(types.VideoGenerationReferenceImage(
-                                    image=img,
-                                    reference_type="asset"
-                                ))
-                                break
+                                buf = io.BytesIO()
+                                img.save(buf, format="PNG")
+                                image_data = buf.getvalue()
                             except: pass
+                        
+                        if image_data:
+                            # Use CHARACTER type for Veo 3.1 reference images
+                            # Ensuring image field is a dictionary with image_bytes per latest SDK preference for some models
+                            references.append(types.VideoGenerationReferenceImage(
+                                image=types.Image(image_bytes=image_data),
+                                reference_id=f"ref_{len(references)}",
+                                reference_type="CHARACTER"
+                            ))
+                            print(f"Added reference image {len(references)}")
+                            break
 
             # 3. Generate video via Veo with references
-            model_id = "veo-001"
+            model_id = "veo-3.1-generate-001"
             loop = asyncio.get_event_loop()
             
             config = types.GenerateVideosConfig(
@@ -507,18 +536,23 @@ class GeminiClient:
 
         # Generate narration if requested
         if narration:
+            temp_clean = re.sub(r'\[IMAGE_PROMPT:.*?\]', '', full_text, flags=re.IGNORECASE)
+            print(f"Starting narration generation. Text length: {len(temp_clean)}", flush=True)
             yield {"type": "info", "content": "Generating synchronized narration..."}
             # Clean text for TTS (remove prompt tags)
             clean_text = re.sub(r"\[IMAGE_PROMPT:.*?\]", "", full_text, flags=re.IGNORECASE)
             clean_text = re.sub(r"\[VIDEO_PROMPT:.*?\]", "", clean_text, flags=re.IGNORECASE)
             try:
+                print(f"Calling Google TTS for text: {clean_text[:50]}...", flush=True)
                 narration_res = await self._generate_google_tts(clean_text.strip(), active_style)
                 if narration_res:
+                    print(f"Narration generated successfully: {len(narration_res.get('blocks', []))} blocks", flush=True)
                     yield narration_res
                 else:
+                    print("Narration returned None", flush=True)
                     yield {"type": "info", "content": "Narrator is unavailable for this tale."}
             except Exception as e:
-                print(f"Initial TTS yielding error: {e}")
+                print(f"Initial TTS yielding error: {e}", flush=True)
                 yield {"type": "info", "content": "Narration forge failed. Visuals only."}
 
     async def continue_storybook_stream(self, prompt: str, existing_context: str, mode: str = "Storybook", style: str = "Cinematic", duration: str = "Short", keywords: list = None):
